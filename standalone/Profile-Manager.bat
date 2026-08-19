@@ -7,14 +7,31 @@ set "PROFILES_DIR=C:\ProgramData\WireSock Foundation\WireSock Secure Connect\Pro
 set "CLI="
 set "ACTIVE_PROFILE="
 set "PROFILE_COUNT=0"
+set "WS_TEMP="
+set "WS_SELF=%~f0"
+set "WS_DIR=%~dp0"
 
 net session >nul 2>&1
 if errorlevel 1 (
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath '%~f0' -WorkingDirectory '%~dp0' -Verb RunAs"
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath $env:WS_SELF -WorkingDirectory $env:WS_DIR -Verb RunAs"
   exit /b
 )
 
 pushd "%~dp0" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Cannot access script directory:
+  echo %~dp0
+  pause
+  exit /b 1
+)
+
+call :init_temp
+if errorlevel 1 (
+  echo [ERROR] No writable temporary directory is available.
+  pause
+  goto exit_script
+)
+
 call :find_cli
 if not defined CLI (
   echo [ERROR] WireSock CLI not found.
@@ -78,12 +95,17 @@ pause
 goto menu
 
 :import_profile
-set "PICK=%TEMP%\wiresock-import-%RANDOM%-%RANDOM%.txt"
-powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Import WireSock profile'; $d.Filter='WireGuard configuration (*.conf)|*.conf|All files (*.*)|*.*'; if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){$d.FileName}" >"!PICK!" 2>nul
+set "PICK=!WS_TEMP!\wiresock-import-!RANDOM!-!RANDOM!.txt"
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Import WireSock profile'; $d.Filter='WireGuard configuration (*.conf)|*.conf|All files (*.*)|*.*'; $d.Multiselect=$false; if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){$d.FileName}" >"!PICK!" 2>nul
 set "IMPORT_PATH="
 if exist "!PICK!" set /p "IMPORT_PATH="<"!PICK!"
-del "!PICK!" >nul 2>&1
+del /q "!PICK!" >nul 2>&1
 if not defined IMPORT_PATH goto menu
+if not exist "!IMPORT_PATH!" (
+  echo [ERROR] Selected file no longer exists.
+  pause
+  goto menu
+)
 "!CLI!" import "!IMPORT_PATH!"
 echo.
 if errorlevel 1 (echo [ERROR] Import failed.) else (echo [OK] Profile imported.)
@@ -94,12 +116,12 @@ goto menu
 call :choose_profile
 if errorlevel 1 goto menu
 set "EXPORT_PROFILE=!SELECTED_PROFILE!"
-set "PICK=%TEMP%\wiresock-export-%RANDOM%-%RANDOM%.txt"
+set "PICK=!WS_TEMP!\wiresock-export-!RANDOM!-!RANDOM!.txt"
 set "WS_EXPORT_NAME=!EXPORT_PROFILE!"
 powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.SaveFileDialog; $d.Title='Export WireSock profile'; $d.Filter='WireGuard configuration (*.conf)|*.conf|All files (*.*)|*.*'; $d.FileName=$env:WS_EXPORT_NAME+'.conf'; $d.OverwritePrompt=$true; if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){$d.FileName}" >"!PICK!" 2>nul
 set "EXPORT_PATH="
 if exist "!PICK!" set /p "EXPORT_PATH="<"!PICK!"
-del "!PICK!" >nul 2>&1
+del /q "!PICK!" >nul 2>&1
 if not defined EXPORT_PATH goto menu
 if exist "!EXPORT_PATH!" del /q "!EXPORT_PATH!" >nul 2>&1
 "!CLI!" export "!EXPORT_PROFILE!" "!EXPORT_PATH!"
@@ -112,9 +134,14 @@ goto menu
 call :choose_profile
 if errorlevel 1 goto menu
 set "VIEW_PROFILE=!SELECTED_PROFILE!"
-set "VIEW_DIR=%TEMP%\wiresock-view-%RANDOM%-%RANDOM%"
+set "VIEW_DIR=!WS_TEMP!\wiresock-view-!RANDOM!-!RANDOM!"
 mkdir "!VIEW_DIR!" >nul 2>&1
-set "VIEW_FILE=!VIEW_DIR!\!VIEW_PROFILE!.conf"
+if not exist "!VIEW_DIR!\" (
+  echo [ERROR] Could not create temporary view directory.
+  pause
+  goto menu
+)
+set "VIEW_FILE=!VIEW_DIR!\profile.conf"
 "!CLI!" export "!VIEW_PROFILE!" "!VIEW_FILE!" >nul 2>&1
 if errorlevel 1 (
   echo [ERROR] Could not export profile for viewing.
@@ -122,8 +149,10 @@ if errorlevel 1 (
   pause
   goto menu
 )
-notepad.exe "!VIEW_FILE!"
-rd /s /q "!VIEW_DIR!" >nul 2>&1
+start "" notepad.exe "!VIEW_FILE!"
+echo Opened temporary exported profile in Notepad.
+echo Temporary files will remain until this manager exits or Windows cleans TEMP.
+timeout /t 2 /nobreak >nul
 goto menu
 
 :duplicate_profile
@@ -200,13 +229,30 @@ pause
 goto menu
 
 :open_folder
-if exist "%PROFILES_DIR%" (explorer.exe "%PROFILES_DIR%") else (echo [ERROR] Profiles folder not found.&pause)
+if exist "%PROFILES_DIR%\" (
+  explorer.exe "%PROFILES_DIR%" >nul 2>&1
+) else (
+  echo [ERROR] Profiles folder not found:
+  echo %PROFILES_DIR%
+  pause
+)
 goto menu
+
+:init_temp
+set "WS_TEMP=%TEMP%"
+if not defined WS_TEMP set "WS_TEMP=%SystemRoot%\Temp"
+if not exist "!WS_TEMP!\" mkdir "!WS_TEMP!" >nul 2>&1
+if exist "!WS_TEMP!\" exit /b 0
+set "WS_TEMP=%~dp0.tmp"
+if not exist "!WS_TEMP!\" mkdir "!WS_TEMP!" >nul 2>&1
+if exist "!WS_TEMP!\" exit /b 0
+exit /b 1
 
 :load_profiles
 for /l %%I in (1,1,200) do set "PROFILE_%%I="
 set "PROFILE_COUNT=0"
-set "LIST_FILE=%TEMP%\wiresock-list-%RANDOM%-%RANDOM%.txt"
+if not defined CLI exit /b 0
+set "LIST_FILE=!WS_TEMP!\wiresock-list-!RANDOM!-!RANDOM!.txt"
 "!CLI!" list >"!LIST_FILE!" 2>nul
 if exist "!LIST_FILE!" (
   for /f "usebackq delims=" %%L in ("!LIST_FILE!") do (
@@ -217,7 +263,7 @@ if exist "!LIST_FILE!" (
       set "PROFILE_!PROFILE_COUNT!=!LINE:~2!"
     )
   )
-  del "!LIST_FILE!" >nul 2>&1
+  del /q "!LIST_FILE!" >nul 2>&1
 )
 exit /b 0
 
@@ -262,9 +308,9 @@ exit /b 0
 :copy_profile_as
 set "SRC=%~1"
 set "DST=%~2"
-set "OP_DIR=%TEMP%\wiresock-profile-op-%RANDOM%-%RANDOM%"
+set "OP_DIR=!WS_TEMP!\wiresock-profile-op-!RANDOM!-!RANDOM!"
 mkdir "!OP_DIR!" >nul 2>&1
-if errorlevel 1 exit /b 1
+if not exist "!OP_DIR!\" exit /b 1
 set "OP_FILE=!OP_DIR!\!DST!.conf"
 "!CLI!" export "!SRC!" "!OP_FILE!" >nul 2>&1
 if errorlevel 1 (rd /s /q "!OP_DIR!" >nul 2>&1&exit /b 1)
@@ -278,18 +324,19 @@ exit /b !errorlevel!
 :read_config
 set "ACTIVE_PROFILE="
 if not exist "%CONFIG%" exit /b 0
-set "OUT=%TEMP%\wiresock-active-%RANDOM%-%RANDOM%.txt"
-powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "[xml]$x=Get-Content -LiteralPath '%CONFIG%' -Raw; $n=$x.SelectSingleNode('//ActiveConfig'); if($n){$n.InnerText}" >"!OUT!" 2>nul
+set "WS_CONFIG=%CONFIG%"
+set "OUT=!WS_TEMP!\wiresock-active-!RANDOM!-!RANDOM!.txt"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [xml]$x=Get-Content -LiteralPath $env:WS_CONFIG -Raw; $n=$x.SelectSingleNode('//ActiveConfig'); if($n){$n.InnerText}" >"!OUT!" 2>nul
 if exist "!OUT!" set /p "ACTIVE_PROFILE="<"!OUT!"
-del "!OUT!" >nul 2>&1
+del /q "!OUT!" >nul 2>&1
 exit /b 0
 
 :find_cli
 set "CLI="
-set "OUT=%TEMP%\wiresock-where-%RANDOM%-%RANDOM%.txt"
+set "OUT=!WS_TEMP!\wiresock-where-!RANDOM!-!RANDOM!.txt"
 where wiresock-connect-cli.exe >"!OUT!" 2>nul
 if exist "!OUT!" set /p "CLI="<"!OUT!"
-del "!OUT!" >nul 2>&1
+del /q "!OUT!" >nul 2>&1
 if defined CLI exit /b 0
 if exist "C:\Program Files\Wiresock Secure Connect\command-line\wiresock-connect-cli.exe" set "CLI=C:\Program Files\Wiresock Secure Connect\command-line\wiresock-connect-cli.exe"
 if not defined CLI if exist "C:\Program Files\WireSock Secure Connect\command-line\wiresock-connect-cli.exe" set "CLI=C:\Program Files\WireSock Secure Connect\command-line\wiresock-connect-cli.exe"
