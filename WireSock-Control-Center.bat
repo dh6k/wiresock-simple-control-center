@@ -3,7 +3,9 @@ setlocal EnableExtensions EnableDelayedExpansion
 title WireSock Control Center
 
 set "CONFIG=C:\ProgramData\WireSock Foundation\WireSock Secure Connect\wiresock.config"
+set "PROFILES_DIR=C:\ProgramData\WireSock Foundation\WireSock Secure Connect\Profiles"
 set "SETTINGS=%~dp0WireSock-Control-Center.ini"
+set "LOG_DIR=%~dp0logs"
 set "CONNECT_TIMEOUT=15"
 set "CLI="
 set "GUI_EXE="
@@ -12,11 +14,11 @@ set "ACTIVE_PROFILE="
 set "SPLIT=False"
 set "KILLSWITCH=False"
 set "WSSTATUS=UNKNOWN"
+set "PROFILE_COUNT=0"
+set "LAST_STARTUP_LOG="
 
 rem ============================================================
 rem Elevate and force a valid working directory.
-rem This matters when the BAT is launched from a freshly cloned repo,
-rem Explorer, a shortcut, another drive, or after UAC changes context.
 rem ============================================================
 net session >nul 2>&1
 if errorlevel 1 (
@@ -34,13 +36,19 @@ if errorlevel 1 (
 
 call :load_settings
 call :find_cli
+call :startup_monitor
 
 goto menu
 
+rem ============================================================
+rem MAIN MENU
+rem ============================================================
 :menu
+call :find_cli
 call :read_config
 call :get_status
 call :get_gui_status
+call :load_profiles
 cls
 echo ============================================================
 echo                 WireSock Control Center
@@ -49,6 +57,7 @@ echo.
 echo VPN Status       : !WSSTATUS!
 echo WireSock GUI     : !GUI_STATUS!
 echo Active Profile   : !ACTIVE_PROFILE!
+echo Profiles         : !PROFILE_COUNT!
 if /i "!SPLIT!"=="True" (echo Split Tunneling  : ON) else (echo Split Tunneling  : OFF)
 if /i "!KILLSWITCH!"=="True" (echo Kill Switch      : ON) else (echo Kill Switch      : OFF)
 echo Connect Timeout  : !CONNECT_TIMEOUT! seconds
@@ -59,6 +68,8 @@ echo [3] Switch Profile
 echo [4] Check Installation Status
 echo [5] Set Connection Timeout
 echo [6] Toggle WireSock GUI
+echo [7] Profile Manager
+echo [8] Run Startup Monitor
 echo [0] Exit
 echo.
 set "CHOICE="
@@ -69,11 +80,121 @@ if "!CHOICE!"=="3" goto switch_profile
 if "!CHOICE!"=="4" goto check_install
 if "!CHOICE!"=="5" goto set_timeout
 if "!CHOICE!"=="6" goto toggle_gui
+if "!CHOICE!"=="7" goto profile_manager
+if "!CHOICE!"=="8" goto run_startup_monitor
 if "!CHOICE!"=="0" goto exit_script
 goto menu
 
 rem ============================================================
-rem Toggle WireSock GUI only. Does not touch the VPN tunnel/service.
+rem STARTUP MONITOR / PREFLIGHT
+rem Runs automatically before the first menu and can be rerun.
+rem It is read-only: no VPN/profile/settings changes are made.
+rem ============================================================
+:run_startup_monitor
+call :startup_monitor
+
+goto menu
+
+:startup_monitor
+if not exist "%LOG_DIR%" mkdir "%LOG_DIR%" >nul 2>&1
+
+set "STAMP_FILE=%TEMP%\wiresock-stamp-%RANDOM%-%RANDOM%.txt"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Get-Date -Format yyyyMMdd-HHmmss" >"!STAMP_FILE!" 2>nul
+set "STARTUP_STAMP=%RANDOM%-%RANDOM%"
+if exist "!STAMP_FILE!" set /p "STARTUP_STAMP="<"!STAMP_FILE!"
+del "!STAMP_FILE!" >nul 2>&1
+
+set "LAST_STARTUP_LOG=%LOG_DIR%\startup-!STARTUP_STAMP!.log"
+>"!LAST_STARTUP_LOG!" echo WireSock Control Center startup monitor
+>>"!LAST_STARTUP_LOG!" echo Timestamp: !STARTUP_STAMP!
+>>"!LAST_STARTUP_LOG!" echo Script: %~f0
+>>"!LAST_STARTUP_LOG!" echo.
+
+cls
+echo ============================================================
+echo            WireSock Control Center - Preflight
+echo ============================================================
+echo.
+
+echo [OK]   Script directory : %~dp0
+>>"!LAST_STARTUP_LOG!" echo [OK] Script directory: %~dp0
+
+call :find_cli
+if defined CLI (
+  echo [OK]   WireSock CLI    : !CLI!
+  >>"!LAST_STARTUP_LOG!" echo [OK] WireSock CLI: !CLI!
+) else (
+  echo [WARN] WireSock CLI    : NOT FOUND
+  >>"!LAST_STARTUP_LOG!" echo [WARN] WireSock CLI: NOT FOUND
+)
+
+if exist "%CONFIG%" (
+  echo [OK]   Config file     : FOUND
+  >>"!LAST_STARTUP_LOG!" echo [OK] Config file: %CONFIG%
+) else (
+  echo [WARN] Config file     : NOT FOUND
+  >>"!LAST_STARTUP_LOG!" echo [WARN] Config file: NOT FOUND - %CONFIG%
+)
+
+call :read_config
+if defined ACTIVE_PROFILE (
+  echo [OK]   Active profile  : !ACTIVE_PROFILE!
+  >>"!LAST_STARTUP_LOG!" echo [OK] Active profile: !ACTIVE_PROFILE!
+) else (
+  echo [WARN] Active profile  : UNKNOWN
+  >>"!LAST_STARTUP_LOG!" echo [WARN] Active profile: UNKNOWN
+)
+
+if /i "!SPLIT!"=="True" (
+  echo [OK]   Split tunneling : ON
+  >>"!LAST_STARTUP_LOG!" echo [OK] Split tunneling: ON
+) else if /i "!SPLIT!"=="False" (
+  echo [OK]   Split tunneling : OFF
+  >>"!LAST_STARTUP_LOG!" echo [OK] Split tunneling: OFF
+) else (
+  echo [WARN] Split tunneling : UNKNOWN
+  >>"!LAST_STARTUP_LOG!" echo [WARN] Split tunneling: UNKNOWN
+)
+
+call :load_profiles
+if !PROFILE_COUNT! GTR 0 (
+  echo [OK]   Profiles        : !PROFILE_COUNT!
+  >>"!LAST_STARTUP_LOG!" echo [OK] Profiles: !PROFILE_COUNT!
+) else (
+  echo [WARN] Profiles        : NONE / UNAVAILABLE
+  >>"!LAST_STARTUP_LOG!" echo [WARN] Profiles: NONE / UNAVAILABLE
+)
+
+call :get_status
+if /i "!WSSTATUS!"=="UNKNOWN" (
+  echo [WARN] VPN status      : UNKNOWN
+  >>"!LAST_STARTUP_LOG!" echo [WARN] VPN status: UNKNOWN
+) else (
+  echo [OK]   VPN status      : !WSSTATUS!
+  >>"!LAST_STARTUP_LOG!" echo [OK] VPN status: !WSSTATUS!
+)
+
+call :get_gui_status
+if /i "!GUI_STATUS!"=="NOT FOUND" (
+  echo [WARN] WireSock GUI    : NOT FOUND
+  >>"!LAST_STARTUP_LOG!" echo [WARN] WireSock GUI: NOT FOUND
+) else (
+  echo [OK]   WireSock GUI    : !GUI_STATUS!
+  >>"!LAST_STARTUP_LOG!" echo [OK] WireSock GUI: !GUI_STATUS!
+)
+
+echo [OK]   Connect timeout  : !CONNECT_TIMEOUT! seconds
+>>"!LAST_STARTUP_LOG!" echo [OK] Connect timeout: !CONNECT_TIMEOUT! seconds
+
+echo.
+echo Log: !LAST_STARTUP_LOG!
+echo.
+echo Starting Control Center...
+timeout /t 2 /nobreak >nul
+exit /b 0
+
+rem ============================================================
+rem Toggle WireSock GUI only. Does not touch VPN tunnel/service.
 rem ============================================================
 :toggle_gui
 call :find_gui
@@ -84,7 +205,6 @@ if not defined GUI_EXE (
   echo ============================================================
   echo.
   echo [ERROR] WireSock GUI executable was not found.
-  echo.
   echo Detection checks Start Menu shortcuts and common install paths.
   echo VPN/tunnel state was not changed.
   echo.
@@ -96,7 +216,7 @@ call :get_gui_status
 cls
 echo ============================================================
 echo   Toggle WireSock GUI
- echo ============================================================
+echo ============================================================
 echo.
 echo GUI executable : !GUI_EXE!
 echo GUI status     : !GUI_STATUS!
@@ -105,7 +225,6 @@ echo.
 if /i "!GUI_STATUS!"=="ON" goto gui_off
 
 echo Opening WireSock GUI...
-rem Explorer starts the GUI in the interactive desktop session.
 explorer.exe "!GUI_EXE!" >nul 2>&1
 timeout /t 2 /nobreak >nul
 call :get_gui_status
@@ -218,43 +337,24 @@ pause
 goto menu
 
 rem ============================================================
-rem Switch profile
+rem Switch profile and connect it
 rem ============================================================
 :switch_profile
 call :require_runtime
 if errorlevel 1 goto menu
 call :read_config
-cls
-echo ============================================================
-echo   Switch WireSock Profile
-echo ============================================================
-echo.
-echo Current profile: !ACTIVE_PROFILE!
-echo.
-set "COUNT=0"
-set "LIST_FILE=%TEMP%\wiresock-list-%RANDOM%-%RANDOM%.txt"
-"!CLI!" list >"!LIST_FILE!" 2>nul
-for /f "usebackq delims=" %%L in ("!LIST_FILE!") do (
-  set "LINE=%%L"
-  for /f "tokens=* delims= " %%T in ("!LINE!") do set "LINE=%%T"
-  if "!LINE:~0,2!"=="- " (
-    set /a COUNT+=1
-    set "PROFILE_!COUNT!=!LINE:~2!"
-    if /i "!LINE:~2!"=="!ACTIVE_PROFILE!" (echo [!COUNT!] !LINE:~2! [ACTIVE]) else (echo [!COUNT!] !LINE:~2!)
+call :choose_profile
+if errorlevel 1 goto menu
+set "TARGET=!SELECTED_PROFILE!"
+
+if /i "!TARGET!"=="!ACTIVE_PROFILE!" (
+  call :get_status
+  if /i "!WSSTATUS!"=="Connected" (
+    echo Already connected to !TARGET!.
+    timeout /t 2 /nobreak >nul
+    goto menu
   )
 )
-del "!LIST_FILE!" >nul 2>&1
-
-echo [0] Back
-echo.
-set "SEL="
-set /p "SEL=Select profile: "
-if "!SEL!"=="0" goto menu
-echo(!SEL!| findstr /r "^[0-9][0-9]*$" >nul || goto menu
-if !SEL! LSS 1 goto menu
-if !SEL! GTR !COUNT! goto menu
-for %%N in (!SEL!) do set "TARGET=!PROFILE_%%N!"
-if not defined TARGET goto menu
 
 set "OLD_PROFILE=!ACTIVE_PROFILE!"
 call :get_status
@@ -289,6 +389,251 @@ pause
 goto menu
 
 rem ============================================================
+rem PROFILE MANAGER
+rem CLI-supported primitives: list/import/export/delete.
+rem Duplicate/Rename are composed safely from export + import.
+rem ============================================================
+:profile_manager
+call :require_runtime
+if errorlevel 1 goto menu
+call :read_config
+call :load_profiles
+cls
+echo ============================================================
+echo                  WireSock Profile Manager
+echo ============================================================
+echo.
+echo Active Profile : !ACTIVE_PROFILE!
+echo Profiles       : !PROFILE_COUNT!
+echo.
+echo [1] List Profiles
+echo [2] Import Profile (.conf)
+echo [3] Export Profile
+echo [4] View Profile
+echo [5] Duplicate Profile
+echo [6] Rename Profile
+echo [7] Delete Profile
+echo [8] Open Profiles Folder
+echo [0] Back
+echo.
+set "PM_CHOICE="
+set /p "PM_CHOICE=Select: "
+if "!PM_CHOICE!"=="1" goto pm_list
+if "!PM_CHOICE!"=="2" goto pm_import
+if "!PM_CHOICE!"=="3" goto pm_export
+if "!PM_CHOICE!"=="4" goto pm_view
+if "!PM_CHOICE!"=="5" goto pm_duplicate
+if "!PM_CHOICE!"=="6" goto pm_rename
+if "!PM_CHOICE!"=="7" goto pm_delete
+if "!PM_CHOICE!"=="8" goto pm_open_folder
+if "!PM_CHOICE!"=="0" goto menu
+goto profile_manager
+
+:pm_list
+call :read_config
+call :load_profiles
+cls
+echo ============================================================
+echo   WireSock Profiles
+echo ============================================================
+echo.
+if !PROFILE_COUNT! LEQ 0 (
+  echo No profiles found or WireSock service is unavailable.
+) else (
+  for /l %%I in (1,1,!PROFILE_COUNT!) do (
+    if /i "!PROFILE_%%I!"=="!ACTIVE_PROFILE!" (
+      echo [%%I] !PROFILE_%%I! [ACTIVE]
+    ) else (
+      echo [%%I] !PROFILE_%%I!
+    )
+  )
+)
+echo.
+pause
+goto profile_manager
+
+:pm_import
+set "IMPORT_PICK=%TEMP%\wiresock-import-pick-%RANDOM%-%RANDOM%.txt"
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.OpenFileDialog; $d.Title='Import WireSock profile'; $d.Filter='WireGuard configuration (*.conf)|*.conf|All files (*.*)|*.*'; $d.Multiselect=$false; if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){$d.FileName}" >"!IMPORT_PICK!" 2>nul
+set "IMPORT_PATH="
+if exist "!IMPORT_PICK!" set /p "IMPORT_PATH="<"!IMPORT_PICK!"
+del "!IMPORT_PICK!" >nul 2>&1
+if not defined IMPORT_PATH goto profile_manager
+
+cls
+echo Importing:
+echo !IMPORT_PATH!
+echo.
+"!CLI!" import "!IMPORT_PATH!"
+if errorlevel 1 (
+  echo.
+  echo [ERROR] Import failed.
+) else (
+  echo.
+  echo [OK] Profile imported.
+)
+echo.
+pause
+goto profile_manager
+
+:pm_export
+call :choose_profile
+if errorlevel 1 goto profile_manager
+set "EXPORT_PROFILE=!SELECTED_PROFILE!"
+set "EXPORT_PICK=%TEMP%\wiresock-export-pick-%RANDOM%-%RANDOM%.txt"
+set "WS_EXPORT_NAME=!EXPORT_PROFILE!"
+powershell.exe -NoProfile -STA -ExecutionPolicy Bypass -Command "Add-Type -AssemblyName System.Windows.Forms; $d=New-Object System.Windows.Forms.SaveFileDialog; $d.Title='Export WireSock profile'; $d.Filter='WireGuard configuration (*.conf)|*.conf|All files (*.*)|*.*'; $d.FileName=$env:WS_EXPORT_NAME+'.conf'; $d.OverwritePrompt=$true; if($d.ShowDialog() -eq [System.Windows.Forms.DialogResult]::OK){$d.FileName}" >"!EXPORT_PICK!" 2>nul
+set "EXPORT_PATH="
+if exist "!EXPORT_PICK!" set /p "EXPORT_PATH="<"!EXPORT_PICK!"
+del "!EXPORT_PICK!" >nul 2>&1
+if not defined EXPORT_PATH goto profile_manager
+
+if exist "!EXPORT_PATH!" del /q "!EXPORT_PATH!" >nul 2>&1
+"!CLI!" export "!EXPORT_PROFILE!" "!EXPORT_PATH!"
+if errorlevel 1 (
+  echo.
+  echo [ERROR] Export failed.
+) else (
+  echo.
+  echo [OK] Exported to:
+  echo !EXPORT_PATH!
+)
+echo.
+pause
+goto profile_manager
+
+:pm_view
+call :choose_profile
+if errorlevel 1 goto profile_manager
+set "VIEW_PROFILE=!SELECTED_PROFILE!"
+set "VIEW_DIR=%TEMP%\wiresock-view-%RANDOM%-%RANDOM%"
+mkdir "!VIEW_DIR!" >nul 2>&1
+set "VIEW_FILE=!VIEW_DIR!\!VIEW_PROFILE!.conf"
+"!CLI!" export "!VIEW_PROFILE!" "!VIEW_FILE!" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Could not export profile for viewing.
+  rd /s /q "!VIEW_DIR!" >nul 2>&1
+  pause
+  goto profile_manager
+)
+notepad.exe "!VIEW_FILE!"
+rd /s /q "!VIEW_DIR!" >nul 2>&1
+goto profile_manager
+
+:pm_duplicate
+call :choose_profile
+if errorlevel 1 goto profile_manager
+set "SOURCE_PROFILE=!SELECTED_PROFILE!"
+call :prompt_new_profile_name "Duplicate profile as"
+if errorlevel 1 goto profile_manager
+set "NEW_PROFILE=!NEW_PROFILE_NAME!"
+call :profile_exists "!NEW_PROFILE!"
+if not errorlevel 1 (
+  echo [ERROR] A profile named !NEW_PROFILE! already exists.
+  pause
+  goto profile_manager
+)
+call :copy_profile_as "!SOURCE_PROFILE!" "!NEW_PROFILE!"
+if errorlevel 1 (
+  echo [ERROR] Duplicate failed.
+) else (
+  echo [OK] Created profile: !NEW_PROFILE!
+)
+echo.
+pause
+goto profile_manager
+
+:pm_rename
+call :read_config
+call :choose_profile
+if errorlevel 1 goto profile_manager
+set "SOURCE_PROFILE=!SELECTED_PROFILE!"
+if /i "!SOURCE_PROFILE!"=="!ACTIVE_PROFILE!" (
+  echo.
+  echo [BLOCKED] Rename the active profile only after switching away from it.
+  echo This avoids leaving ActiveConfig pointing at a deleted name.
+  echo.
+  pause
+  goto profile_manager
+)
+call :prompt_new_profile_name "Rename profile to"
+if errorlevel 1 goto profile_manager
+set "NEW_PROFILE=!NEW_PROFILE_NAME!"
+call :profile_exists "!NEW_PROFILE!"
+if not errorlevel 1 (
+  echo [ERROR] A profile named !NEW_PROFILE! already exists.
+  pause
+  goto profile_manager
+)
+
+call :copy_profile_as "!SOURCE_PROFILE!" "!NEW_PROFILE!"
+if errorlevel 1 (
+  echo [ERROR] Could not create the new profile. Original was not changed.
+  pause
+  goto profile_manager
+)
+
+"!CLI!" delete "!SOURCE_PROFILE!" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] New profile was created but old profile could not be deleted.
+  echo Rolling back the new profile...
+  "!CLI!" delete "!NEW_PROFILE!" >nul 2>&1
+  pause
+  goto profile_manager
+)
+
+echo [OK] Renamed !SOURCE_PROFILE! to !NEW_PROFILE!.
+pause
+goto profile_manager
+
+:pm_delete
+call :read_config
+call :choose_profile
+if errorlevel 1 goto profile_manager
+set "DELETE_PROFILE=!SELECTED_PROFILE!"
+if /i "!DELETE_PROFILE!"=="!ACTIVE_PROFILE!" (
+  echo.
+  echo [BLOCKED] Cannot delete the active profile.
+  echo Switch to another profile first.
+  echo.
+  pause
+  goto profile_manager
+)
+
+cls
+echo ============================================================
+echo   Delete WireSock Profile
+echo ============================================================
+echo.
+echo Profile: !DELETE_PROFILE!
+echo.
+set "CONFIRM="
+set /p "CONFIRM=Type DELETE to confirm: "
+if /i not "!CONFIRM!"=="DELETE" goto profile_manager
+
+"!CLI!" delete "!DELETE_PROFILE!"
+if errorlevel 1 (
+  echo.
+  echo [ERROR] Delete failed.
+) else (
+  echo.
+  echo [OK] Profile deleted.
+)
+echo.
+pause
+goto profile_manager
+
+:pm_open_folder
+if exist "%PROFILES_DIR%" (
+  explorer.exe "%PROFILES_DIR%"
+) else (
+  echo [ERROR] Profiles directory not found:
+  echo %PROFILES_DIR%
+  pause
+)
+goto profile_manager
+
+rem ============================================================
 rem Installation check
 rem ============================================================
 :check_install
@@ -296,6 +641,7 @@ call :find_cli
 call :read_config
 call :get_status
 call :get_gui_status
+call :load_profiles
 cls
 echo ============================================================
 echo WireSock Installation Status
@@ -306,11 +652,14 @@ where wiresock-connect-cli.exe >nul 2>&1 && (echo CLI in PATH     : YES) || (ech
 if defined GUI_EXE (echo GUI executable  : OK&echo GUI path        : !GUI_EXE!) else (echo GUI executable  : NOT FOUND)
 echo GUI status      : !GUI_STATUS!
 if exist "%CONFIG%" (echo Config file     : OK) else (echo Config file     : NOT FOUND)
+if exist "%PROFILES_DIR%" (echo Profiles folder : OK) else (echo Profiles folder : NOT FOUND)
+echo Profile count   : !PROFILE_COUNT!
 echo Active profile  : !ACTIVE_PROFILE!
 if /i "!SPLIT!"=="True" (echo Split tunneling: ON) else (echo Split tunneling: OFF)
 if /i "!KILLSWITCH!"=="True" (echo Kill Switch     : ON) else (echo Kill Switch     : OFF)
 echo VPN status      : !WSSTATUS!
 echo Timeout         : !CONNECT_TIMEOUT! seconds
+if defined LAST_STARTUP_LOG echo Startup log     : !LAST_STARTUP_LOG!
 echo.
 pause
 goto menu
@@ -341,7 +690,115 @@ if !CONNECT_TIMEOUT! GTR 120 set "CONNECT_TIMEOUT=15"
 exit /b 0
 
 rem ============================================================
-rem Find CLI without relying on the current directory.
+rem Profile helper routines
+rem ============================================================
+:load_profiles
+for /l %%I in (1,1,200) do set "PROFILE_%%I="
+set "PROFILE_COUNT=0"
+if not defined CLI exit /b 0
+set "LIST_FILE=%TEMP%\wiresock-list-%RANDOM%-%RANDOM%.txt"
+"!CLI!" list >"!LIST_FILE!" 2>nul
+if exist "!LIST_FILE!" (
+  for /f "usebackq delims=" %%L in ("!LIST_FILE!") do (
+    set "LINE=%%L"
+    for /f "tokens=* delims= " %%T in ("!LINE!") do set "LINE=%%T"
+    if "!LINE:~0,2!"=="- " (
+      set /a PROFILE_COUNT+=1
+      set "PROFILE_!PROFILE_COUNT!=!LINE:~2!"
+    )
+  )
+  del "!LIST_FILE!" >nul 2>&1
+)
+exit /b 0
+
+:choose_profile
+call :read_config
+call :load_profiles
+set "SELECTED_PROFILE="
+if !PROFILE_COUNT! LEQ 0 (
+  echo [ERROR] No profiles found.
+  pause
+  exit /b 1
+)
+
+cls
+echo ============================================================
+echo   Select WireSock Profile
+echo ============================================================
+echo.
+for /l %%I in (1,1,!PROFILE_COUNT!) do (
+  if /i "!PROFILE_%%I!"=="!ACTIVE_PROFILE!" (
+    echo [%%I] !PROFILE_%%I! [ACTIVE]
+  ) else (
+    echo [%%I] !PROFILE_%%I!
+  )
+)
+echo [0] Cancel
+echo.
+set "PROFILE_SEL="
+set /p "PROFILE_SEL=Select profile: "
+if "!PROFILE_SEL!"=="0" exit /b 1
+echo(!PROFILE_SEL!| findstr /r "^[0-9][0-9]*$" >nul || exit /b 1
+if !PROFILE_SEL! LSS 1 exit /b 1
+if !PROFILE_SEL! GTR !PROFILE_COUNT! exit /b 1
+for %%N in (!PROFILE_SEL!) do set "SELECTED_PROFILE=!PROFILE_%%N!"
+if not defined SELECTED_PROFILE exit /b 1
+exit /b 0
+
+:profile_exists
+set "LOOKUP_PROFILE=%~1"
+call :load_profiles
+for /l %%I in (1,1,!PROFILE_COUNT!) do (
+  if /i "!PROFILE_%%I!"=="!LOOKUP_PROFILE!" exit /b 0
+)
+exit /b 1
+
+:prompt_new_profile_name
+set "NEW_PROFILE_NAME="
+cls
+echo ============================================================
+echo   WireSock Profile Manager
+echo ============================================================
+echo.
+echo %~1
+echo Use a Windows-safe file/profile name. Empty input cancels.
+echo.
+set /p "NEW_PROFILE_NAME=Name: "
+if not defined NEW_PROFILE_NAME exit /b 1
+set "WS_NEW_PROFILE_NAME=!NEW_PROFILE_NAME!"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$n=$env:WS_NEW_PROFILE_NAME; if([string]::IsNullOrWhiteSpace($n)){exit 1}; if($n.IndexOfAny([IO.Path]::GetInvalidFileNameChars()) -ge 0){exit 2}; if($n.EndsWith('.') -or $n.EndsWith(' ')){exit 3}" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Invalid profile name.
+  pause
+  exit /b 1
+)
+exit /b 0
+
+:copy_profile_as
+set "COPY_SOURCE=%~1"
+set "COPY_TARGET=%~2"
+set "OP_DIR=%TEMP%\wiresock-profile-op-%RANDOM%-%RANDOM%"
+mkdir "!OP_DIR!" >nul 2>&1
+if errorlevel 1 exit /b 1
+set "OP_FILE=!OP_DIR!\!COPY_TARGET!.conf"
+
+"!CLI!" export "!COPY_SOURCE!" "!OP_FILE!" >nul 2>&1
+if errorlevel 1 (
+  rd /s /q "!OP_DIR!" >nul 2>&1
+  exit /b 1
+)
+
+"!CLI!" import "!OP_FILE!" >nul 2>&1
+set "COPY_RC=!errorlevel!"
+rd /s /q "!OP_DIR!" >nul 2>&1
+if not "!COPY_RC!"=="0" exit /b 1
+
+call :profile_exists "!COPY_TARGET!"
+if errorlevel 1 exit /b 1
+exit /b 0
+
+rem ============================================================
+rem Find CLI without relying on current directory.
 rem ============================================================
 :find_cli
 set "CLI="
@@ -370,13 +827,11 @@ exit /b 0
 
 rem ============================================================
 rem Read config in ONE PowerShell process.
-rem No FOR /F command substitution, which was the source of the
-rem cloned-folder/UAC path failure in the previous revision.
 rem ============================================================
 :read_config
 set "ACTIVE_PROFILE="
-set "SPLIT=False"
-set "KILLSWITCH=False"
+set "SPLIT=Unknown"
+set "KILLSWITCH=Unknown"
 if not exist "%CONFIG%" exit /b 0
 
 set "CFG_FILE=%TEMP%\wiresock-config-%RANDOM%-%RANDOM%.txt"
@@ -393,8 +848,6 @@ exit /b 0
 
 rem ============================================================
 rem GUI detection.
-rem Important: PowerShell output is redirected to a normal temp file.
-rem We intentionally do NOT run the complex PowerShell inside FOR /F.
 rem ============================================================
 :find_gui
 set "GUI_EXE="
