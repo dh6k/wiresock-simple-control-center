@@ -9,13 +9,15 @@ set "WS_TEMP="
 
 rem ============================================================
 rem Standalone GUI toggle must run elevated, just like the main
-rem Control Center. Without elevation Windows may allow tasklist to
-rem see WireSockConnect.exe but deny Stop-Process/taskkill.
+rem Control Center. Pass both the script path and working directory
+rem directly through environment variables. Do NOT use Split-Path:
+rem Windows PowerShell 5.1 can reject -LiteralPath + -Parent here.
 rem ============================================================
 net session >nul 2>&1
 if errorlevel 1 (
   set "WS_SELF=%~f0"
-  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath $env:WS_SELF -WorkingDirectory (Split-Path -LiteralPath $env:WS_SELF -Parent) -Verb RunAs"
+  set "WS_DIR=%~dp0"
+  powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "Start-Process -FilePath $env:WS_SELF -WorkingDirectory $env:WS_DIR -Verb RunAs"
   exit /b
 )
 
@@ -52,7 +54,7 @@ call :get_gui_status
 cls
 echo ============================================================
 echo   WireSock GUI Toggle
- echo ============================================================
+echo ============================================================
 echo.
 echo GUI executable : !GUI_EXE!
 echo GUI process    : !GUI_IMAGE!
@@ -124,7 +126,7 @@ echo Matching processes:
 tasklist /fi "IMAGENAME eq !GUI_IMAGE!"
 echo.
 echo If the PID changes immediately after each kill, another WireSock
- echo component is relaunching the GUI automatically.
+echo component is relaunching the GUI automatically.
 echo.
 pause
 goto exit_error
