@@ -1,17 +1,25 @@
-# WireSock Control Center
+# WireSock Simple Control Center
 
-Bộ script `.bat` để điều khiển **WireSock Secure Connect** trên Windows mà không phải mở GUI mỗi lần. Repo có một bản **all-in-one** và một thư mục `standalone/` chứa từng chức năng riêng để dùng độc lập.
+Một bộ script `.bat` cho Windows để điều khiển **WireSock Secure Connect** nhanh bằng CLI, đồng thời giữ các thao tác nguy hiểm như reconnect, đổi profile và chỉnh split tunneling có timeout/rollback rõ ràng.
 
-> Các script được xây dựng dựa trên layout `wiresock.config` có các node `ActiveConfig`, `EnableSplitTunnelingGlobally` và `EnableKillSwitch`. Script không thay đổi danh sách app/IP split tunneling của bạn.
+Repo có hai cách dùng:
 
-## Tính năng
+- **`WireSock-Control-Center.bat`**: bản all-in-one, có dashboard và menu.
+- **`standalone/`**: từng chức năng tách riêng, dùng khi chỉ cần một tác vụ cụ thể.
 
-`WireSock-Control-Center.bat` hiển thị một dashboard nhỏ:
+> Các script này không thay thế WireSock. Chúng gọi `wiresock-connect-cli.exe` và đọc một số giá trị từ `wiresock.config` để đồng bộ trạng thái với WireSock Secure Connect.
+
+## Dashboard hiện tại
 
 ```text
+============================================================
+                WireSock Control Center
+============================================================
+
 VPN Status       : Connected
 WireSock GUI     : ON
 Active Profile   : wg-SG-FREE-14
+Profiles         : 6
 Split Tunneling  : ON
 Kill Switch      : OFF
 Connect Timeout  : 15 seconds
@@ -22,52 +30,46 @@ Connect Timeout  : 15 seconds
 [4] Check Installation Status
 [5] Set Connection Timeout
 [6] Toggle WireSock GUI
+[7] Profile Manager
+[8] Run Startup Monitor
 [0] Exit
 ```
-
-Nó hỗ trợ:
-
-- bật/tắt VPN bằng profile đang active;
-- bật/tắt **global Split Tunneling**;
-- chuyển profile bằng menu đánh số rồi tự connect profile mới;
-- bật/tắt riêng **WireSock Secure Connect GUI** mà không cố tình dừng VPN service;
-- hiển thị `VPN Status`, `WireSock GUI`, `Active Profile`, `Split Tunneling`, `Kill Switch`;
-- kiểm tra WireSock/CLI/GUI/WinGet/PATH/config;
-- timeout connect tùy chỉnh, mặc định **15 giây**, phạm vi **5-120 giây**;
-- rollback config/profile nếu thao tác connect thất bại;
-- cleanup stale network lock khi Kill Switch đang tắt.
 
 ## Cấu trúc repo
 
 ```text
 wiresock-simple-control-center/
 ├─ WireSock-Control-Center.bat
+├─ WireSock-Control-Center.ini        # tạo khi chỉnh timeout, bị gitignore
+├─ logs/                              # tạo lúc chạy startup monitor, *.log bị gitignore
 ├─ README.md
 ├─ .gitignore
 └─ standalone/
    ├─ Install-WireSock-and-Add-PATH.bat
    ├─ Toggle-VPN.bat
    ├─ Toggle-Global-Split-Tunneling.bat
-   ├─ Toggle-WireSock-GUI.bat
    ├─ Switch-Profile.bat
-   └─ Check-Installation.bat
+   ├─ Check-Installation.bat
+   ├─ Toggle-WireSock-GUI.bat
+   ├─ Profile-Manager.bat
+   └─ Startup-Monitor.bat
 ```
 
 ## Yêu cầu
 
 - Windows 10/11.
 - PowerShell có sẵn trong Windows.
-- WireSock Secure Connect.
-- `wiresock-connect-cli.exe` trong `PATH` hoặc tại một trong các path:
+- WireSock Secure Connect đã được cài đặt, hoặc dùng script cài đặt trong `standalone/`.
+- `wiresock-connect-cli.exe` nằm trong `PATH` hoặc một trong các vị trí thường dùng:
 
 ```text
 C:\Program Files\Wiresock Secure Connect\command-line\wiresock-connect-cli.exe
 C:\Program Files\WireSock Secure Connect\command-line\wiresock-connect-cli.exe
 ```
 
-Các thao tác sửa config và network sẽ tự xin quyền Administrator.
+Control Center tự xin quyền Administrator vì một số thao tác cần sửa file trong `ProgramData` hoặc cleanup trạng thái network.
 
-## Cài WireSock + thêm CLI vào PATH
+## Cài WireSock và thêm CLI vào PATH
 
 Chạy:
 
@@ -75,197 +77,272 @@ Chạy:
 standalone\Install-WireSock-and-Add-PATH.bat
 ```
 
-Script dùng:
-
-```bat
-winget install NTKERNEL.WireSockVPNClient --accept-package-agreements --accept-source-agreements
-```
-
-sau đó thêm:
+Script dùng package WinGet:
 
 ```text
-C:\Program Files\Wiresock Secure Connect\command-line
+NTKERNEL.WireSockVPNClient
 ```
 
-vào **System PATH** nếu chưa tồn tại.
+và thêm thư mục CLI vào System PATH nếu cần.
 
-## File cấu hình WireSock được dùng
+---
 
-Các script đọc file:
+# Startup Monitor / Preflight
+
+Control Center bây giờ **không nhảy thẳng vào menu**. Sau khi UAC elevation và `pushd` về đúng thư mục script, nó chạy một preflight read-only trước.
+
+Ví dụ:
 
 ```text
-C:\ProgramData\WireSock Foundation\WireSock Secure Connect\wiresock.config
+============================================================
+           WireSock Control Center - Preflight
+============================================================
+
+[OK]   Script directory : D:\tools\wiresock-simple-control-center\
+[OK]   WireSock CLI    : C:\Program Files\...\wiresock-connect-cli.exe
+[OK]   Config file     : FOUND
+[OK]   Active profile  : wg-SG-FREE-14
+[OK]   Split tunneling : ON
+[OK]   Profiles        : 6
+[OK]   VPN status      : Connected
+[OK]   WireSock GUI    : OFF
+[OK]   Connect timeout : 15 seconds
+
+Log: ...\logs\startup-20260819-173400.log
+
+Starting Control Center...
 ```
 
-Ba giá trị quan trọng:
+Preflight kiểm tra:
 
-```xml
-<ActiveConfig>wg-SG-FREE-14</ActiveConfig>
-<EnableSplitTunnelingGlobally>True</EnableSplitTunnelingGlobally>
-<EnableKillSwitch>False</EnableKillSwitch>
-```
+- thư mục script sau UAC;
+- WireSock CLI;
+- `wiresock.config`;
+- active profile;
+- global Split Tunneling;
+- số lượng profile CLI nhìn thấy;
+- trạng thái VPN;
+- trạng thái WireSock GUI;
+- connection timeout hiện tại.
 
-- `ActiveConfig`: profile được chọn.
-- `EnableSplitTunnelingGlobally`: trạng thái switch **Apply split tunneling to all profiles**.
-- `EnableKillSwitch`: dùng để quyết định có được tự cleanup network lock khi lỗi hay không.
+### Mục đích
 
-## Vì sao connect chạy bất đồng bộ
+Nó giúp phát hiện ngay các lỗi kiểu:
 
-Một phiên bản cũ từng gọi trực tiếp:
+- clone repo sang folder khác rồi path bị sai;
+- CLI không nằm trong PATH;
+- WireSock chưa tạo config;
+- service/CLI không trả status;
+- không còn profile;
+- GUI executable không dò được.
 
-```bat
-wiresock-connect-cli connect "profile" -exit
-```
+Startup Monitor **không đổi VPN, profile hay setting**. Nó chỉ đọc và ghi log.
 
-rồi mới chạy vòng timeout. Nếu CLI mắc ở trạng thái `Connecting`, chính lệnh `connect` có thể giữ BAT lại trước khi vòng timeout được chạy.
-
-Bản hiện tại khởi động connect bằng:
-
-```bat
-start "" /b wiresock-connect-cli.exe connect "profile" ... -exit
-```
-
-sau đó poll:
-
-```bat
-wiresock-connect-cli status
-```
-
-mỗi giây. Nhờ vậy timeout thực sự có cơ hội hoạt động. Nếu quá thời gian cấu hình, script cleanup connection lỗi và cố gắng rollback.
-
-## 1. Toggle VPN
-
-Khi chọn `Toggle VPN`:
+Log được tạo trong:
 
 ```text
-Connected / Connecting
-        ↓
-     disconnect
-        ↓
-       OFF
+logs\startup-YYYYMMDD-HHMMSS.log
 ```
 
-Nếu VPN đang tắt:
+Có thể chạy lại bất kỳ lúc nào từ:
 
 ```text
-NotConnected / Disconnected
-        ↓
+[8] Run Startup Monitor
+```
+
+hoặc chạy bản riêng:
+
+```text
+standalone\Startup-Monitor.bat
+```
+
+---
+
+# 1. Toggle VPN
+
+Khi VPN đang `Connected` hoặc `Connecting`:
+
+```text
+Toggle VPN
+   ↓
+disconnect async
+   ↓
+poll status
+   ↓
+Disconnected / NotConnected
+```
+
+Khi VPN đang tắt:
+
+```text
+Toggle VPN
+   ↓
 đọc ActiveConfig
-        ↓
-connect profile đó
-        ↓
-poll tới Connected
+   ↓
+connect ActiveConfig async
+   ↓
+poll status mỗi giây
+   ↓
+Connected hoặc timeout
 ```
 
-Nếu connect timeout và `EnableKillSwitch=False`, script có thể chạy:
+Nếu connection lỗi và Kill Switch trong config đang OFF, script có thể gọi:
 
 ```bat
 wiresock-connect-cli reset-network-lock
 ```
 
-để cleanup network lock không mong muốn.
+để tránh để lại stale network lock ngoài ý muốn.
 
-## 2. Toggle Global Split Tunneling
+---
 
-Chức năng này **không clone profile** và không sửa `AllowedApps`, `AllowedIPs`, `DisallowedApps` hay danh sách network.
+# 2. Toggle Global Split Tunneling
 
-Nó chỉ đổi đúng node:
+Control Center đọc node:
 
 ```xml
 <EnableSplitTunnelingGlobally>True</EnableSplitTunnelingGlobally>
 ```
 
-thành `False`, hoặc ngược lại.
+trong:
 
-Nếu VPN đang chạy, flow là:
+```text
+C:\ProgramData\WireSock Foundation\WireSock Secure Connect\wiresock.config
+```
+
+Nó chỉ đổi `True ↔ False` cho node đó.
+
+Script **không sửa** danh sách tunneled applications/networks của bạn và không clone profile chỉ để mô phỏng split tunneling.
+
+Nếu VPN đang kết nối:
 
 ```text
 disconnect
    ↓
 backup wiresock.config
    ↓
-True ↔ False
+đổi EnableSplitTunnelingGlobally
    ↓
-verify XML
+verify lại XML
    ↓
 reconnect ActiveConfig
 ```
 
-Nếu reconnect thất bại, script restore backup cũ và thử phục hồi connection trước đó.
+Nếu reconnect thất bại, backup được phục hồi và Control Center thử trả connection về trạng thái trước đó.
 
-## 3. Switch Profile
+Backup all-in-one dùng:
 
-Script lấy danh sách bằng:
+```text
+wiresock.config.control-center-backup
+```
+
+---
+
+# 3. Switch Profile
+
+Danh sách profile được lấy từ:
 
 ```bat
 wiresock-connect-cli list
 ```
 
-và hiện menu:
+Ví dụ:
 
 ```text
 [1] p1bla6-SG-FREE-18
-[2] wg-SG-FREE-14  [ACTIVE]
+[2] wg-SG-FREE-14 [ACTIVE]
 [3] wg-SG-FREE-3
 [4] wg-SG-FREE-6
 ```
 
-Khi chọn profile mới:
+Flow:
 
 ```text
-disconnect tunnel hiện tại
-        ↓
-backup wiresock.config
-        ↓
+chọn profile
+    ↓
+disconnect tunnel cũ nếu cần
+    ↓
+backup config
+    ↓
 đổi <ActiveConfig>
-        ↓
-connect profile mới async
-        ↓
-poll status
+    ↓
+connect profile mới ở background
+    ↓
+poll status tới Connected hoặc timeout
 ```
 
-Nếu profile mới không connect được trong timeout:
+Nếu profile mới không connect được:
 
 ```text
 cleanup failed connection
-        ↓
-reset network lock nếu Kill Switch OFF
-        ↓
-restore ActiveConfig cũ
-        ↓
+    ↓
+reset stale network lock nếu Kill Switch OFF
+    ↓
+restore config cũ
+    ↓
 connect lại profile cũ
 ```
 
-## 4. Check Installation Status
+## Vì sao `connect` phải chạy async
 
-Dashboard kiểm tra:
+Không gọi `connect ... -exit` đồng bộ rồi mới timeout.
 
-- `winget.exe` có tồn tại hay không;
-- package ID `NTKERNEL.WireSockVPNClient` có được WinGet nhận diện;
-- vị trí `wiresock-connect-cli.exe`;
-- CLI có nằm trong `PATH`;
-- vị trí executable của WireSock GUI và trạng thái GUI `ON/OFF`;
-- `wiresock.config` có tồn tại;
+Control Center dùng kiểu:
+
+```bat
+start "" /b "%CLI%" connect "profile" -log-level error -network-lock off -exit
+```
+
+sau đó tự poll:
+
+```bat
+wiresock-connect-cli status
+```
+
+Lý do là `-exit` chỉ thoát khi connection đạt trạng thái `Connected`. Nếu WireSock mắc ở `Connecting`, một call đồng bộ có thể giữ luôn BAT trước khi timeout của script được chạy.
+
+---
+
+# 4. Check Installation Status
+
+Mục này kiểm tra:
+
+- WinGet;
+- WireSock CLI và path thực tế;
+- CLI có nằm trong `PATH` hay không;
+- WireSock GUI executable;
+- GUI đang ON/OFF;
+- `wiresock.config`;
+- thư mục Profiles;
+- số profile;
 - active profile;
-- trạng thái global split tunneling;
+- Split Tunneling;
 - Kill Switch;
-- kết quả `wiresock-connect-cli status`.
+- VPN status;
+- connection timeout;
+- đường dẫn startup log gần nhất trong phiên hiện tại.
 
-Có bản riêng:
+Bản standalone:
 
 ```text
 standalone\Check-Installation.bat
 ```
 
-## 5. Connection timeout
+---
 
-Bản all-in-one mặc định dùng:
+# 5. Connection Timeout
+
+Mặc định:
 
 ```text
 15 seconds
 ```
 
-Có thể đổi từ menu `Set Connection Timeout`, phạm vi `5-120` giây.
+Có thể chỉnh từ **5 đến 120 giây** ở:
+
+```text
+[5] Set Connection Timeout
+```
 
 Giá trị được lưu cạnh BAT:
 
@@ -279,148 +356,267 @@ Ví dụ:
 CONNECT_TIMEOUT=15
 ```
 
-File này được `.gitignore` vì nó là setting local của từng máy.
+File này không được commit lên repo.
 
-## 6. Toggle WireSock GUI
+---
 
-WireSock cho phép VPN connection được khởi tạo bởi system service và **không yêu cầu application UI phải chạy**. Tài liệu chính thức mô tả điều này trong phần General Settings:
+# 6. Toggle WireSock GUI
 
-https://www.wiresock.net/documentation/wiresock-secure-connect/general-settings.html
+`Toggle WireSock GUI` chỉ thao tác với process giao diện.
 
-Vì vậy `Toggle WireSock GUI` chỉ nhắm tới executable của giao diện, không cố tình gọi `disconnect` và không dừng VPN service.
+Control Center dò executable theo hai tầng:
 
-### Cách tìm đúng GUI executable
+1. shortcut WireSock Secure Connect trong Start Menu;
+2. fallback sang các thư mục cài WireSock thường dùng và lọc executable theo ProductName/FileDescription.
 
-Script không hardcode một tên process đoán mò. Nó làm theo thứ tự:
-
-```text
-Start Menu shortcut "WireSock Secure Connect"
-        ↓
-resolve shortcut TargetPath
-        ↓
-nếu không thấy, scan common install directories
-        ↓
-đối chiếu ProductName / FileDescription
-```
-
-Fallback scan bỏ qua các executable có khả năng là CLI/service/updater, ví dụ:
+Khi GUI đang OFF:
 
 ```text
-wiresock-connect-cli.exe
-wiresock-client.exe
-uninstaller / updater
+resolve GUI executable
+   ↓
+explorer.exe "...\WireSock GUI.exe"
 ```
 
-### Khi GUI đang OFF
+Khi GUI đang ON, script chỉ stop process có **đúng executable path đã resolve**, thay vì `taskkill *wiresock*`.
 
-Control Center dùng:
+Mục tiêu là không vô tình dừng service/tunnel chỉ vì muốn đóng cửa sổ GUI.
 
-```bat
-explorer.exe "<resolved GUI executable>"
-```
-
-Thay vì `start` trực tiếp từ Control Center đang chạy Administrator. Mục đích là để GUI được mở qua desktop shell bình thường thay vì vô tình kế thừa elevated token của BAT.
-
-### Khi GUI đang ON
-
-Script tìm process có **đúng executable path đã resolve**, sau đó chỉ terminate process đó. Nó không dùng kiểu:
-
-```bat
-taskkill /im *wiresock*
-```
-
-vì cách đó là một lời mời khá chân thành để giết nhầm CLI hoặc service.
-
-Có bản standalone:
+Bản standalone:
 
 ```text
 standalone\Toggle-WireSock-GUI.bat
 ```
 
-Standalone này không thay đổi VPN status, profile hay split tunneling.
+---
 
-## Các script standalone
+# 7. Profile Manager
 
-### `Install-WireSock-and-Add-PATH.bat`
-
-Chỉ cài WireSock qua WinGet và thêm thư mục CLI vào System PATH.
-
-### `Toggle-VPN.bat`
-
-Chỉ bật/tắt tunnel bằng `ActiveConfig`. Không sửa split tunneling hay profile list.
-
-### `Toggle-Global-Split-Tunneling.bat`
-
-Chỉ toggle `EnableSplitTunnelingGlobally` và reconnect khi cần.
-
-### `Toggle-WireSock-GUI.bat`
-
-Chỉ mở/đóng WireSock Secure Connect GUI bằng executable path được resolve động. Không cố tình bật/tắt VPN tunnel.
-
-### `Switch-Profile.bat`
-
-Chỉ hiển thị profile menu, đổi `ActiveConfig`, rồi connect profile đã chọn. Có timeout và rollback.
-
-### `Check-Installation.bat`
-
-Chỉ đọc trạng thái cài đặt/config/network, không cố tình thay đổi WireSock settings.
-
-## Backup và rollback
-
-Trước khi sửa `wiresock.config`, Control Center tạo backup tại:
+Profile Manager mới có trong Control Center và dưới dạng standalone:
 
 ```text
-C:\ProgramData\WireSock Foundation\WireSock Secure Connect\wiresock.config.control-center-backup
+standalone\Profile-Manager.bat
 ```
 
-Các standalone script có thể dùng tên backup riêng như:
+Menu:
 
 ```text
-wiresock.config.toggle-backup
-wiresock.config.profile-switch-backup
+============================================================
+                 WireSock Profile Manager
+============================================================
+
+Active Profile : wg-SG-FREE-14
+Profiles       : 6
+
+[1] List Profiles
+[2] Import Profile (.conf)
+[3] Export Profile
+[4] View Profile
+[5] Duplicate Profile
+[6] Rename Profile
+[7] Delete Profile
+[8] Open Profiles Folder
+[0] Back
 ```
 
-Các file backup này nằm trong `ProgramData`, không nằm trong repo.
+## List Profiles
 
-## Recovery khi Internet bị block ngoài ý muốn
+Dùng CLI:
 
-Nếu một connection lỗi và Internet vẫn bị block trong khi bạn **không chủ ý dùng Kill Switch**, mở Terminal/CMD bằng Administrator và thử:
+```bat
+wiresock-connect-cli list
+```
+
+và đánh dấu profile khớp `ActiveConfig` bằng `[ACTIVE]`.
+
+## Import Profile
+
+Mở Windows file picker và gọi:
+
+```bat
+wiresock-connect-cli import "D:\VPN\profile.conf"
+```
+
+Theo tài liệu CLI hiện tại của WireSock, tên profile import được lấy từ **tên file không có extension**, và import sẽ fail nếu profile cùng tên đã tồn tại.
+
+## Export Profile
+
+Chọn profile và vị trí lưu bằng Save File dialog, sau đó gọi:
+
+```bat
+wiresock-connect-cli export "PROFILE" "D:\Backup\PROFILE.conf"
+```
+
+CLI WireSock không overwrite file đã có, nên Control Center dùng overwrite confirmation của Save dialog rồi xóa target cũ trước khi gọi export.
+
+## View Profile
+
+View không đọc trực tiếp file trong `ProgramData`.
+
+Flow:
+
+```text
+export profile vào %TEMP%
+   ↓
+mở bằng Notepad
+   ↓
+đóng Notepad
+   ↓
+xóa bản temp
+```
+
+Như vậy nội dung profile, bao gồm key nếu có, không bị in ra console hay startup log.
+
+## Duplicate Profile
+
+WireSock CLI không có command `duplicate` riêng.
+
+Control Center xây thao tác này từ primitive đã được CLI hỗ trợ:
+
+```text
+export profile nguồn
+   ↓
+lưu temp dưới NEW_NAME.conf
+   ↓
+import NEW_NAME.conf
+   ↓
+verify NEW_NAME xuất hiện trong list
+```
+
+Cơ chế này dựa trên hành vi được WireSock tài liệu hóa: **import profile name được derive từ filename**.
+
+## Rename Profile
+
+CLI hiện tại cũng không có `rename` riêng, nên rename được thực hiện theo kiểu transactional-ish:
+
+```text
+export OLD
+   ↓
+import bản copy với NEW_NAME.conf
+   ↓
+verify NEW_NAME tồn tại
+   ↓
+delete OLD
+```
+
+Nếu bước xóa OLD thất bại, script cố xóa NEW để rollback.
+
+### Safety rule
+
+Control Center **không cho rename profile đang active**. Hãy switch sang profile khác trước để tránh `ActiveConfig` trỏ vào một profile vừa bị xóa.
+
+## Delete Profile
+
+Dùng:
+
+```bat
+wiresock-connect-cli delete "PROFILE"
+```
+
+Script yêu cầu nhập:
+
+```text
+DELETE
+```
+
+để xác nhận.
+
+Control Center **không cho delete profile đang active**.
+
+## Open Profiles Folder
+
+Mở thư mục WireSock profile được tài liệu hóa tại:
+
+```text
+C:\ProgramData\WireSock Foundation\WireSock Secure Connect\Profiles
+```
+
+---
+
+# File config được đọc
+
+Control Center đọc:
+
+```text
+C:\ProgramData\WireSock Foundation\WireSock Secure Connect\wiresock.config
+```
+
+Các node đang được sử dụng:
+
+```xml
+<ActiveConfig>wg-SG-FREE-14</ActiveConfig>
+<EnableSplitTunnelingGlobally>True</EnableSplitTunnelingGlobally>
+<EnableKillSwitch>False</EnableKillSwitch>
+```
+
+`ActiveConfig` và `EnableSplitTunnelingGlobally` được sửa ở những thao tác tương ứng. `EnableKillSwitch` chỉ được đọc để Control Center quyết định cách connect/cleanup network lock.
+
+---
+
+# Recovery khi Internet bị block ngoài ý muốn
+
+Nếu một connection lỗi và Internet vẫn bị block trong khi bạn không chủ ý bật Kill Switch, mở Terminal/CMD bằng Administrator:
 
 ```bat
 wiresock-connect-cli disconnect
 wiresock-connect-cli reset-network-lock
 ```
 
-Sau đó connect lại một profile hoạt động:
+Sau đó connect lại profile tốt:
 
 ```bat
 wiresock-connect-cli connect "PROFILE_NAME" -exit
 ```
 
-Nếu bạn cố ý bật Kill Switch, hãy hiểu rằng `reset-network-lock` sẽ gỡ network lock đó; đừng chạy nó chỉ vì thích bấm nút cho vui.
+Nếu Kill Switch đang được bật có chủ ý, `reset-network-lock` sẽ gỡ network lock đó, nên không nên dùng như một nút chữa bách bệnh.
 
-## Lưu ý
+---
 
-- Script thao tác trực tiếp với `wiresock.config`; nên giữ backup nếu bạn tự sửa code.
-- Không commit `wiresock.config` cá nhân lên GitHub. File đó có thể chứa endpoint, đường dẫn ứng dụng và các setting riêng.
-- Tên profile có thể khác hoàn toàn giữa các máy; script lấy danh sách trực tiếp từ WireSock CLI nên không hardcode profile cụ thể.
-- GUI detection ưu tiên Start Menu shortcut để tránh phụ thuộc tên executable giữa các phiên bản WireSock.
-- `Check-Installation.bat` chỉ là diagnostic. Nó không phải trình sửa lỗi tự động.
+# Các script standalone
 
-## Quick start
+| File | Chức năng |
+|---|---|
+| `Install-WireSock-and-Add-PATH.bat` | Cài WireSock qua WinGet và thêm CLI vào System PATH |
+| `Toggle-VPN.bat` | Bật/tắt VPN theo ActiveConfig |
+| `Toggle-Global-Split-Tunneling.bat` | Toggle global split tunneling và reconnect nếu cần |
+| `Switch-Profile.bat` | Đổi ActiveConfig + async connect + timeout/rollback |
+| `Check-Installation.bat` | Diagnostic cài đặt/trạng thái |
+| `Toggle-WireSock-GUI.bat` | Bật/tắt riêng GUI process |
+| `Profile-Manager.bat` | List/import/export/view/duplicate/rename/delete profile |
+| `Startup-Monitor.bat` | Preflight read-only để kiểm tra WireSock trước khi thao tác |
 
-Nếu máy chưa cài WireSock:
+---
 
-```text
-1. standalone\Install-WireSock-and-Add-PATH.bat
-2. mở terminal mới hoặc đăng xuất/đăng nhập lại nếu PATH chưa refresh ở app đang chạy
-3. WireSock-Control-Center.bat
+# Quick start
+
+Clone repo:
+
+```bat
+git clone https://github.com/dh6k/wiresock-simple-control-center.git
+cd wiresock-simple-control-center
 ```
 
-Nếu WireSock đã cài và CLI hoạt động:
+Nếu WireSock chưa cài:
+
+```text
+standalone\Install-WireSock-and-Add-PATH.bat
+```
+
+Sau đó:
 
 ```text
 WireSock-Control-Center.bat
 ```
 
-Thế là đủ. Một cửa sổ CMD nhỏ giờ còn quản luôn cái GUI đã sinh ra để quản VPN. Phần mềm điều khiển phần mềm điều khiển mạng, một cấu trúc rất con người.
+Control Center sẽ tự elevate, cố định working directory về thư mục repo, chạy Startup Monitor, rồi mới mở menu.
+
+---
+
+# Tài liệu WireSock tham chiếu
+
+Triển khai CLI profile manager dựa trên tài liệu WireSock Secure Connect hiện tại, trong đó CLI hỗ trợ `list`, `import`, `export`, `delete`, và quy định profile import lấy tên từ filename:
+
+- https://www.wiresock.net/documentation/wiresock-secure-connect/wiresock-connect-cli.html
+- https://www.wiresock.net/documentation/wiresock-secure-connect/connection-profiles.html
+- https://v3.wiresock.net/documentation/wiresock-secure-connect/application-initialization-issues.html
+
+Tài liệu được kiểm tra lại khi cập nhật tính năng này vào ngày **2026-08-19**.
