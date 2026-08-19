@@ -5,6 +5,14 @@ title WireSock GUI Toggle
 set "GUI_EXE="
 set "GUI_STATUS=UNKNOWN"
 
+pushd "%~dp0" >nul 2>&1
+if errorlevel 1 (
+  echo [ERROR] Cannot access script directory:
+  echo %~dp0
+  pause
+  exit /b 1
+)
+
 call :find_gui
 if not defined GUI_EXE (
   cls
@@ -14,10 +22,11 @@ if not defined GUI_EXE (
   echo.
   echo [ERROR] WireSock Secure Connect GUI executable was not found.
   echo.
-  echo The script checks the Start Menu shortcut first, then common
-  echo WireSock installation directories.
+  echo Detection checks Start Menu shortcuts and common install paths.
+  echo VPN/tunnel state was not changed.
   echo.
   pause
+  popd >nul 2>&1
   exit /b 1
 )
 
@@ -25,7 +34,7 @@ call :get_gui_status
 cls
 echo ============================================================
 echo   WireSock GUI Toggle
- echo ============================================================
+echo ============================================================
 echo.
 echo GUI executable : !GUI_EXE!
 echo GUI status     : !GUI_STATUS!
@@ -34,51 +43,54 @@ echo.
 if /i "!GUI_STATUS!"=="ON" goto gui_off
 
 echo Opening WireSock GUI...
-rem Use Explorer so the GUI starts with the normal desktop user token
-rem even when this script is launched from an elevated parent window.
 explorer.exe "!GUI_EXE!" >nul 2>&1
 timeout /t 2 /nobreak >nul
 call :get_gui_status
 if /i "!GUI_STATUS!"=="ON" (
   echo WireSock GUI: ON
   timeout /t 2 /nobreak >nul
+  popd >nul 2>&1
   exit /b 0
 )
 
 echo [ERROR] WireSock GUI did not start.
 pause
+popd >nul 2>&1
 exit /b 2
 
 :gui_off
-echo Closing WireSock GUI...
+echo Closing WireSock GUI only...
 set "WS_GUI_EXE=!GUI_EXE!"
-powershell -NoProfile -ExecutionPolicy Bypass -Command "$target=$env:WS_GUI_EXE; Get-Process -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and ([IO.Path]::GetFullPath($_.Path) -ieq [IO.Path]::GetFullPath($target)) } catch { $false } } | Stop-Process -Force -ErrorAction SilentlyContinue"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$target=$env:WS_GUI_EXE; foreach($p in @(Get-Process -ErrorAction SilentlyContinue)){ try { if($p.Path -and ([IO.Path]::GetFullPath($p.Path) -ieq [IO.Path]::GetFullPath($target))){ Stop-Process -Id $p.Id -Force -ErrorAction SilentlyContinue } } catch {} }" >nul 2>&1
 timeout /t 1 /nobreak >nul
 call :get_gui_status
 if /i "!GUI_STATUS!"=="OFF" (
   echo WireSock GUI: OFF
   timeout /t 2 /nobreak >nul
+  popd >nul 2>&1
   exit /b 0
 )
 
 echo [ERROR] WireSock GUI is still running.
 pause
+popd >nul 2>&1
 exit /b 3
 
 :find_gui
 set "GUI_EXE="
-for /f "usebackq delims=" %%G in (`powershell -NoProfile -ExecutionPolicy Bypass -Command ^
-  "$ErrorActionPreference='SilentlyContinue';" ^
-  "$roots=@($env:ProgramData+'\Microsoft\Windows\Start Menu\Programs',$env:APPDATA+'\Microsoft\Windows\Start Menu\Programs');" ^
-  "$shell=New-Object -ComObject WScript.Shell; $target=$null;" ^
-  "foreach($r in $roots){if(Test-Path -LiteralPath $r){foreach($lnk in Get-ChildItem -LiteralPath $r -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue){if($lnk.BaseName -match 'WireSock.*Secure.*Connect'){ $t=$shell.CreateShortcut($lnk.FullName).TargetPath; if($t -and (Test-Path -LiteralPath $t)){ $target=$t; break }}}}; if($target){break}};" ^
-  "if(-not $target){$dirs=@('C:\Program Files\Wiresock Secure Connect','C:\Program Files\WireSock Secure Connect'); foreach($d in $dirs){if(Test-Path -LiteralPath $d){$c=Get-ChildItem -LiteralPath $d -Filter '*.exe' -File -Recurse -ErrorAction SilentlyContinue ^| Where-Object { $_.FullName -notmatch '\\command-line\\' -and $_.Name -notmatch 'wiresock-connect-cli|wiresock-client|unins|uninstall|updater|update' } ^| Where-Object { $_.VersionInfo.ProductName -match 'WireSock.*Secure.*Connect' -or $_.VersionInfo.FileDescription -match 'WireSock.*Secure.*Connect' } ^| Select-Object -First 1; if($c){$target=$c.FullName;break}}}};" ^
-  "if($target){$target}"`) do set "GUI_EXE=%%G"
+set "GUI_FILE=%TEMP%\wiresock-gui-%RANDOM%-%RANDOM%.txt"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='SilentlyContinue'; $target=$null; $roots=@([IO.Path]::Combine($env:ProgramData,'Microsoft\Windows\Start Menu\Programs'),[IO.Path]::Combine($env:APPDATA,'Microsoft\Windows\Start Menu\Programs')); $shell=New-Object -ComObject WScript.Shell; foreach($r in $roots){ if($r -and (Test-Path -LiteralPath $r)){ foreach($lnk in @(Get-ChildItem -LiteralPath $r -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue)){ if($lnk.BaseName -match 'WireSock.*Secure.*Connect'){ $t=$shell.CreateShortcut($lnk.FullName).TargetPath; if($t -and (Test-Path -LiteralPath $t)){ $target=$t; break } } }; if($target){break} } }; if(-not $target){ foreach($d in @('C:\Program Files\Wiresock Secure Connect','C:\Program Files\WireSock Secure Connect')){ if(Test-Path -LiteralPath $d){ foreach($c in @(Get-ChildItem -LiteralPath $d -Filter '*.exe' -File -Recurse -ErrorAction SilentlyContinue)){ if($c.FullName -match '\\command-line\\'){continue}; if($c.Name -match 'wiresock-connect-cli|wiresock-client|unins|uninstall|updater|update'){continue}; if($c.VersionInfo.ProductName -match 'WireSock.*Secure.*Connect' -or $c.VersionInfo.FileDescription -match 'WireSock.*Secure.*Connect'){ $target=$c.FullName; break } }; if($target){break} } } }; if($target){$target}" >"!GUI_FILE!" 2>nul
+if exist "!GUI_FILE!" set /p "GUI_EXE="<"!GUI_FILE!"
+del "!GUI_FILE!" >nul 2>&1
 exit /b 0
 
 :get_gui_status
 set "GUI_STATUS=NOT FOUND"
+if not defined GUI_EXE call :find_gui
 if not defined GUI_EXE exit /b 0
 set "WS_GUI_EXE=!GUI_EXE!"
-for /f "usebackq delims=" %%S in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$target=$env:WS_GUI_EXE; $p=Get-Process -ErrorAction SilentlyContinue ^| Where-Object { try { $_.Path -and ([IO.Path]::GetFullPath($_.Path) -ieq [IO.Path]::GetFullPath($target)) } catch { $false } } ^| Select-Object -First 1; if($p){'ON'}else{'OFF'}"`) do set "GUI_STATUS=%%S"
+set "GUI_STATE_FILE=%TEMP%\wiresock-gui-state-%RANDOM%-%RANDOM%.txt"
+powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$target=$env:WS_GUI_EXE; $found=$false; foreach($p in @(Get-Process -ErrorAction SilentlyContinue)){ try { if($p.Path -and ([IO.Path]::GetFullPath($p.Path) -ieq [IO.Path]::GetFullPath($target))){$found=$true;break} } catch {} }; if($found){'ON'}else{'OFF'}" >"!GUI_STATE_FILE!" 2>nul
+if exist "!GUI_STATE_FILE!" set /p "GUI_STATUS="<"!GUI_STATE_FILE!"
+del "!GUI_STATE_FILE!" >nul 2>&1
 exit /b 0
