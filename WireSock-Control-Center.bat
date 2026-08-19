@@ -6,6 +6,8 @@ set "CONFIG=C:\ProgramData\WireSock Foundation\WireSock Secure Connect\wiresock.
 set "SETTINGS=%~dp0WireSock-Control-Center.ini"
 set "CONNECT_TIMEOUT=15"
 set "CLI="
+set "GUI_EXE="
+set "GUI_STATUS=UNKNOWN"
 set "ACTIVE_PROFILE="
 set "SPLIT=False"
 set "KILLSWITCH=False"
@@ -22,12 +24,14 @@ call :find_cli
 :menu
 call :read_config
 call :get_status
+call :get_gui_status
 cls
 echo ============================================================
 echo                 WireSock Control Center
 echo ============================================================
 echo.
 echo VPN Status       : !WSSTATUS!
+echo WireSock GUI     : !GUI_STATUS!
 echo Active Profile   : !ACTIVE_PROFILE!
 if /i "!SPLIT!"=="True" (echo Split Tunneling  : ON) else (echo Split Tunneling  : OFF)
 if /i "!KILLSWITCH!"=="True" (echo Kill Switch      : ON) else (echo Kill Switch      : OFF)
@@ -38,6 +42,7 @@ echo [2] Toggle Split Tunneling
 echo [3] Switch Profile
 echo [4] Check Installation Status
 echo [5] Set Connection Timeout
+echo [6] Toggle WireSock GUI
 echo [0] Exit
 echo.
 set "CHOICE="
@@ -47,7 +52,67 @@ if "%CHOICE%"=="2" goto toggle_split
 if "%CHOICE%"=="3" goto switch_profile
 if "%CHOICE%"=="4" goto check_install
 if "%CHOICE%"=="5" goto set_timeout
+if "%CHOICE%"=="6" goto toggle_gui
 if "%CHOICE%"=="0" exit /b 0
+goto menu
+
+:toggle_gui
+call :find_gui
+if not defined GUI_EXE (
+  cls
+  echo ============================================================
+  echo   Toggle WireSock GUI
+  echo ============================================================
+  echo.
+  echo [ERROR] WireSock Secure Connect GUI executable was not found.
+  echo.
+  echo The Control Center checks the Start Menu shortcut first,
+  echo then common WireSock installation directories.
+  echo.
+  pause
+  goto menu
+)
+
+call :get_gui_status
+cls
+echo ============================================================
+echo   Toggle WireSock GUI
+ echo ============================================================
+echo.
+echo GUI executable : !GUI_EXE!
+echo GUI status     : !GUI_STATUS!
+echo.
+
+if /i "!GUI_STATUS!"=="ON" goto gui_off
+
+echo Opening WireSock GUI...
+rem Explorer launches the GUI with the normal desktop user token even
+rem though Control Center itself is elevated for config/network changes.
+explorer.exe "!GUI_EXE!" >nul 2>&1
+timeout /t 2 /nobreak >nul
+call :get_gui_status
+if /i "!GUI_STATUS!"=="ON" (
+  echo WireSock GUI: ON
+  timeout /t 2 /nobreak >nul
+) else (
+  echo [ERROR] WireSock GUI did not start.
+  pause
+)
+goto menu
+
+:gui_off
+echo Closing WireSock GUI...
+set "WS_GUI_EXE=!GUI_EXE!"
+powershell -NoProfile -ExecutionPolicy Bypass -Command "$target=$env:WS_GUI_EXE; Get-Process -ErrorAction SilentlyContinue | Where-Object { try { $_.Path -and ([IO.Path]::GetFullPath($_.Path) -ieq [IO.Path]::GetFullPath($target)) } catch { $false } } | Stop-Process -Force -ErrorAction SilentlyContinue"
+timeout /t 1 /nobreak >nul
+call :get_gui_status
+if /i "!GUI_STATUS!"=="OFF" (
+  echo WireSock GUI: OFF
+  timeout /t 2 /nobreak >nul
+) else (
+  echo [ERROR] WireSock GUI is still running.
+  pause
+)
 goto menu
 
 :toggle_vpn
@@ -162,6 +227,7 @@ goto menu
 call :find_cli
 call :read_config
 call :get_status
+call :get_gui_status
 cls
 echo ============================================================
 echo WireSock Installation Status
@@ -169,6 +235,8 @@ echo ============================================================
 where winget.exe >nul 2>&1 && (echo WinGet          : OK) || (echo WinGet          : NOT FOUND)
 if defined CLI (echo CLI executable  : OK&echo CLI path        : !CLI!) else (echo CLI executable  : NOT FOUND)
 where wiresock-connect-cli.exe >nul 2>&1 && (echo CLI in PATH     : YES) || (echo CLI in PATH     : NO)
+if defined GUI_EXE (echo GUI executable  : OK&echo GUI path        : !GUI_EXE!) else (echo GUI executable  : NOT FOUND)
+echo GUI status      : !GUI_STATUS!
 if exist "%CONFIG%" (echo Config file     : OK) else (echo Config file     : NOT FOUND)
 echo Active profile  : !ACTIVE_PROFILE!
 if /i "!SPLIT!"=="True" (echo Split tunneling: ON) else (echo Split tunneling: OFF)
@@ -196,6 +264,25 @@ goto menu
 :load_settings
 if not exist "%SETTINGS%" exit /b 0
 for /f "usebackq tokens=1,* delims==" %%A in ("%SETTINGS%") do if /i "%%A"=="CONNECT_TIMEOUT" set "CONNECT_TIMEOUT=%%B"
+exit /b 0
+
+:find_gui
+set "GUI_EXE="
+for /f "usebackq delims=" %%G in (`powershell -NoProfile -ExecutionPolicy Bypass -Command ^
+  "$ErrorActionPreference='SilentlyContinue';" ^
+  "$roots=@($env:ProgramData+'\Microsoft\Windows\Start Menu\Programs',$env:APPDATA+'\Microsoft\Windows\Start Menu\Programs');" ^
+  "$shell=New-Object -ComObject WScript.Shell; $target=$null;" ^
+  "foreach($r in $roots){if(Test-Path -LiteralPath $r){foreach($lnk in Get-ChildItem -LiteralPath $r -Filter '*.lnk' -Recurse -ErrorAction SilentlyContinue){if($lnk.BaseName -match 'WireSock.*Secure.*Connect'){ $t=$shell.CreateShortcut($lnk.FullName).TargetPath; if($t -and (Test-Path -LiteralPath $t)){ $target=$t; break }}}}; if($target){break}};" ^
+  "if(-not $target){$dirs=@('C:\Program Files\Wiresock Secure Connect','C:\Program Files\WireSock Secure Connect'); foreach($d in $dirs){if(Test-Path -LiteralPath $d){$c=Get-ChildItem -LiteralPath $d -Filter '*.exe' -File -Recurse -ErrorAction SilentlyContinue ^| Where-Object { $_.FullName -notmatch '\\command-line\\' -and $_.Name -notmatch 'wiresock-connect-cli|wiresock-client|unins|uninstall|updater|update' } ^| Where-Object { $_.VersionInfo.ProductName -match 'WireSock.*Secure.*Connect' -or $_.VersionInfo.FileDescription -match 'WireSock.*Secure.*Connect' } ^| Select-Object -First 1; if($c){$target=$c.FullName;break}}}};" ^
+  "if($target){$target}"`) do set "GUI_EXE=%%G"
+exit /b 0
+
+:get_gui_status
+call :find_gui
+set "GUI_STATUS=NOT FOUND"
+if not defined GUI_EXE exit /b 0
+set "WS_GUI_EXE=!GUI_EXE!"
+for /f "usebackq delims=" %%S in (`powershell -NoProfile -ExecutionPolicy Bypass -Command "$target=$env:WS_GUI_EXE; $p=Get-Process -ErrorAction SilentlyContinue ^| Where-Object { try { $_.Path -and ([IO.Path]::GetFullPath($_.Path) -ieq [IO.Path]::GetFullPath($target)) } catch { $false } } ^| Select-Object -First 1; if($p){'ON'}else{'OFF'}"`) do set "GUI_STATUS=%%S"
 exit /b 0
 
 :find_cli
