@@ -94,6 +94,7 @@ set "ACTIVE_PROFILE="
 set "SPLIT=UNKNOWN"
 set "KILLSWITCH=UNKNOWN"
 if not exist "%CONFIG%" exit /b 0
+set "WS_CONFIG=%CONFIG%"
 set "OUT=!WS_TEMP!\wiresock-config-!RANDOM!-!RANDOM!.txt"
 powershell.exe -NoProfile -ExecutionPolicy Bypass -Command "$ErrorActionPreference='Stop'; [xml]$x=Get-Content -LiteralPath $env:WS_CONFIG -Raw; $a=$x.SelectSingleNode('//ActiveConfig'); $s=$x.SelectSingleNode('//EnableSplitTunnelingGlobally'); $k=$x.SelectSingleNode('//EnableKillSwitch'); if($a){'ACTIVE='+$a.InnerText}; if($s){'SPLIT='+$s.InnerText}; if($k){'KILL='+$k.InnerText}" >"!OUT!" 2>nul
 if exist "!OUT!" (
