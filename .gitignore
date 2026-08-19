@@ -1,3 +1,5 @@
 WireSock-Control-Center.ini
 *.log
 *.tmp
+.tmp/
+standalone/.tmp/
